@@ -8,11 +8,15 @@ var Ajaxify = function(params) {
 		content_selector: '#content,article:first,.article:first,.post:first',
 		menu_selector: '#menu,#nav,nav:first,.nav:first',
 		additional_contents: [],
+		additional_contents_fade_in: false,
+		scroll_top_animation: true,
 		scroll_duration: 800,
 		scroll_easing: 'swing',
-		fade_duration: 800,
 		fade_in: false,
-		callback: function() {}
+		fade_duration: 800,
+		callback_control: false, // if true scroll_top function will be sent as parameter to after_callback
+		before_callback: function() {}, // called when a link or back/forward button is clicked
+		after_callback: function() {} // called after content is loaded
 	},
 	object = this;
 
@@ -67,6 +71,7 @@ var Ajaxify = function(params) {
 				$window = $(window),
 				$body = $(document.body),
 				rootUrl = History.getRootUrl(),
+				not_click = true, // boolean if it's a link or back/forward button
 				scrollOptions = {
 					duration: scroll_duration,
 					easing: scroll_easing
@@ -109,6 +114,9 @@ var Ajaxify = function(params) {
 			$.fn.ajaxify = function(){
 				// Prepare
 				var $this = $(this);
+
+				// Unbind to prevent issues with infinite scroll and multiple ajaxify() calls
+				$this.find('a:internal:not(.no-ajaxy)').unbind('click');
 				
 				// Ajaxify
 				$this.find('a:internal:not(.no-ajaxy)').click(function(event){
@@ -116,7 +124,18 @@ var Ajaxify = function(params) {
 					var
 						$this = $(this),
 						url = $this.attr('href'),
-						title = $this.attr('title')||null;
+						title = $this.attr('title')||null,
+						State = History.getState(),
+						actual_url = State.url,
+						actual_title = State.title,
+						relativeUrl = actual_url.replace(rootUrl,'');
+						// define that it's a link click
+						not_click = false;
+
+					if( typeof before_callback !== 'undefined' && typeof before_callback === 'function' ) {
+						before_callback(relativeUrl, actual_url, actual_title);
+						// callback passing relative url, absolute url and title
+					}
 					
 					// Continue as normal for cmd clicks etc
 					if ( event.which == 2 || event.metaKey ) { return true; }
@@ -139,8 +158,26 @@ var Ajaxify = function(params) {
 				// Prepare Variables
 				var
 					State = History.getState(),
-					url = State.url,
+					url = State.url
 					relativeUrl = url.replace(rootUrl,'');
+
+				// We want information about the url before the statechange
+				var
+					previous_index = History.getCurrentIndex() === 0 ? History.getCurrentIndex() : History.getCurrentIndex() - 1,
+					previous_state = History.getStateByIndex(previous_index),
+					previous_url = previous_state.url,
+					previous_title = previous_state.title,
+					previous_relative_url = previous_url.replace(rootUrl, '');
+
+				// If it's not a link click, before_callback has not been sent yet
+				if(not_click === true) {
+
+					if( typeof before_callback !== 'undefined' && typeof before_callback === 'function' ) {
+						before_callback(previous_relative_url, previous_url, previous_title);
+						// callback passing relative url, absolute url and title
+					}
+
+				}
 
 				// Set Loading
 				$body.addClass('loading');
@@ -186,27 +223,29 @@ var Ajaxify = function(params) {
 
 						if(fade_in === true) {
 
-							$content.html(contentHtml).ajaxify().css('opacity',100).fadeIn();
-
-							if(additional_contents.length > 0) {
-
-								for (var i = additional_contents.length - 1; i >= 0; i--) {
-
-									if($(additional_contents[i]).length && $dataBody.find(additional_contents[i]).length) {
-
-										$(additional_contents[i]).html($dataBody.find(additional_contents[i]).html()).ajaxify().css('opacity',100).fadeIn();
-
-									}
-
-								};
-
-							}
+							$content.html(contentHtml).ajaxify().hide().css('opacity',100).fadeIn();
 
 						} else {
 
 							$content.html(contentHtml).ajaxify().css('opacity',100).show();
 
-							if(additional_contents.length > 0) {
+						}
+
+						if(additional_contents.length > 0) {
+
+							if(additional_contents_fade_in === true) {
+
+								for (var i = additional_contents.length - 1; i >= 0; i--) {
+
+									if($(additional_contents[i]).length && $dataBody.find(additional_contents[i]).length) {
+
+										$(additional_contents[i]).html($dataBody.find(additional_contents[i]).html()).ajaxify().hide().css('opacity',100).fadeIn();
+
+									}
+
+								};
+
+							} else {
 
 								for (var i = additional_contents.length - 1; i >= 0; i--) {
 
@@ -241,7 +280,20 @@ var Ajaxify = function(params) {
 						});
 
 						// Complete the change
-						if ( $body.ScrollTo||false ) { $body.ScrollTo(scrollOptions); } /* http://balupton.com/projects/jquery-scrollto */
+						var scroll_to = function() {
+							
+							if(scroll_top_animation === true) {
+								if ( $body.ScrollTo||false ) { $body.ScrollTo(scrollOptions); } /* http://balupton.com/projects/jquery-scrollto */
+							} else {
+								$('body').animate({scrollTop: 0},0);
+							}
+							
+						};
+
+						if(callback_control === false) {
+							scroll_to();
+						}
+
 						$body.removeClass('loading');
 						$window.trigger(completedEventName);
 		
@@ -256,13 +308,23 @@ var Ajaxify = function(params) {
 							// ^ we use the full url here as that is what reinvigorate supports
 						}
 
-						if( typeof callback !== 'undefined' && typeof callback === 'function' ) {
-							callback(relativeUrl, url, title);
-							// callback passing relative url, absolute url and title
+						if( typeof after_callback !== 'undefined' && typeof after_callback === 'function' ) {
+							// callback passing relative url, absolute url, title, not_click(if it's a link or back/forward)
+							if(callback_control === true) {
+								// scroll_to is in your control
+								after_callback(relativeUrl, url, title, not_click, scroll_to);
+							} else {
+								after_callback(relativeUrl, url, title, not_click);
+							}
+							
 						}
+
+						not_click = true;
 					},
 					error: function(jqXHR, textStatus, errorThrown){
 						document.location.href = url;
+						not_click = true;
+
 						return false;
 					}
 				}); // end ajax
